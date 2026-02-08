@@ -1,0 +1,63 @@
+name: Codex AI Review (Reusable)
+
+on:
+  workflow_call:
+    secrets:
+      OPENAI_API_KEY:
+        required: true
+
+jobs:
+  ai-review:
+    name: AI code review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build pull request diff
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BASE_REF:-}" ]; then
+            echo "This reusable workflow expects to be called from a pull_request event."
+            exit 1
+          fi
+
+          echo "Fetching base ref: ${BASE_REF}"
+          git fetch --no-tags --prune --depth=1 origin "${BASE_REF}"
+
+          echo "Generating PR diff (ignoring generated/lock files)..."
+          git diff "origin/${BASE_REF}...HEAD" \
+            -- . \
+            ':(exclude)dist/**' \
+            ':(exclude)build/**' \
+            ':(exclude)node_modules/**' \
+            ':(exclude)**/*.lock' \
+            > pr.diff
+
+          echo "Diff generated at pr.diff"
+          echo "Diff line count: $(wc -l < pr.diff)"
+
+      - name: Run AI review and post comment
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-4.1-mini
+        run: |
+          set -euo pipefail
+          node scripts/ai_review.mjs --diff pr.diff
